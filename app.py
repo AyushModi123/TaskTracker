@@ -66,4 +66,4 @@ async def bulk_delete_tasks(task_ids: TaskIds):
     return JSONResponse(content = None, status_code=204)
 
 if __name__ == '__main__':
-    uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=5000, reload=True)
