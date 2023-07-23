@@ -1,70 +1,69 @@
-from fastapi import FastAPI
-# import pandas as pd
-# import mysql.connector
+from fastapi import FastAPI, HTTPException
 from pymongo import MongoClient
+from user_model import Task, TasksList, TaskIds
+from user_schema import tasks_ids_serializer, task_serializer_out, tasks_serializer_out
+from bson.objectid import ObjectId
 import uvicorn
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 import os
-from bson import ObjectId
-from typing import List, Union
-
-class TaskInfo(BaseModel):
-    title: str
-    is_completed: bool = False
-
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
 load_dotenv()
+
 app = FastAPI()
-MONGODB_URL = os.getenv('MONGODB_URL')
-
-def MongoDB():
-    client = MongoClient(MONGODB_URL)
-    db_records = client.get_database('waterdip_assignmentdb')
-    tasks_records = db_records.tasks
-    return tasks_records
-
-
-tasks_records = MongoDB()
-
-    
-origins = '*'
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+client = MongoClient(os.getenv('MONGODB_URL'))
+db = client["waterdip_assignmentdb"]
+collection = db["tasks"]
 
 @app.post("/v1/tasks/")
-async def add_tasks(tasks_info: Union[TaskInfo, List[TaskInfo]]):
-    try:
-        if isinstance(tasks_info, list):
-            ids = tasks_records.insert_many(dict(tasks_info)).inserted_ids
-            ids = [str(id) for id in ids]
-            return {'id':ids}, 201
-        else:
-            id = tasks_records.insert_one(dict(tasks_info)).inserted_id
-            return {'id':str(id)}, 201
-    except Exception as e:
-        print(e)
-        return {'error':e}, 503
-    
-@app.get("/v1/tasks/")
-async def get_tasks():
-    all_tasks = [task for task in tasks_records.find()]
-    return {'tasks' : all_tasks}, 200
+async def create_task(task: Task):
+    task_data = dict(task)
+    _id = collection.insert_one(task_data).inserted_id
+    posted_task_id = task_serializer_out(collection.find_one({"_id":ObjectId(_id)}))["id"]
+    return JSONResponse(content={"id": posted_task_id}, status_code=201)
 
-@app.get("/v1/tasks/{id}")
-async def get_tasks_by_id(id:str):
-    task = tasks_records.find_one({"_id":ObjectId(id)}, {"title":1, "is_complete":1})
-    if task:
-        task['_id'] = str(task['_id'])
-        return task, 200
-    else:
-        return {'error': '"There is no task at that id"'}, 404
+@app.get("/v1/tasks/")
+async def list_tasks():
+    all_tasks = tasks_serializer_out(collection.find())
+    return JSONResponse(content = all_tasks, status_code=200)
+
+@app.get("/v1/tasks/{task_id}")
+async def get_task(task_id: str):
+    task = collection.find_one({"_id": ObjectId(task_id)})    
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task = task_serializer_out(task)
+    return JSONResponse(content = task, status_code=200)
+
+@app.delete("/v1/tasks/{task_id}")
+async def delete_task(task_id: str):
+    task = collection.find_one({"_id": ObjectId(task_id)})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    collection.delete_one({"_id": ObjectId(task_id)})
+    return JSONResponse(content = None, status_code=204)
+
+@app.put("/v1/tasks/{task_id}")
+async def update_task(task_id: str, task: Task):
+    task_data = dict(task)
+    task_in_db = collection.find_one({"_id": ObjectId(task_id)})
+    if not task_in_db:
+        raise HTTPException(status_code=404, detail="Task not found")
+    collection.update_one({"_id": ObjectId(task_id)}, {"$set": task_data})
+    task_in_db =task_serializer_out(collection.find_one({"_id": ObjectId(task_id)}))
+    return JSONResponse(content = None, status_code=204)
+
+@app.post("/v1/tasks/bulk")
+async def bulk_create_tasks(tasks: TasksList):    
+    tasks_data = [dict(task) for task in tasks.tasks]
+    _ids = collection.insert_many(tasks_data).inserted_ids
+    _ids = tasks_ids_serializer(_ids)
+    return JSONResponse(content={'tasks': _ids}, status_code=204)
+
+@app.post("/v1/tasks/bulk_delete")
+async def bulk_delete_tasks(task_ids: TaskIds):
+    task_ids = [ObjectId(task_id["id"]) for task_id in task_ids.tasks]    
+    collection.delete_many({"_id": {"$in": task_ids}})
+    return JSONResponse(content = None, status_code=204)
 
 if __name__ == '__main__':
-    uvicorn.run("app:app", host="0.0.0.0", port=5000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
