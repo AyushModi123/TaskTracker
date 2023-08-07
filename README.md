@@ -1,4 +1,4 @@
-# Waterdip-AI-Backend-Assignment
+# TaskTracker
 
 A server that can keep track of tasks. Server is capabale to do the following:
 
